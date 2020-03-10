@@ -1,0 +1,10 @@
+Source: catbus-usbrelay-bridge
+Package: catbus-usbrelay-bridge
+Section: misc
+Priority: optional
+Architecture: all
+Build-Depends:
+Depends: python3, python3-paho-mqtt, usbrelay
+Essential: no
+Maintainer: Eth Morgan <eth@ethulhu.co.uk>
+Description: a bridge to allow controlling USB relays over CatBus

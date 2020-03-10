@@ -1,0 +1,11 @@
+{
+	"broker_host": "server.local",
+	"broker_port": 1883,
+
+	"relays": [
+		{
+			"relay": "HURTM_1",
+			"topic": "home/study/desk-light/power"
+		}
+	]
+}

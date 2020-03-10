@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""A bridge between CatBus and usbrelay-compatible USB relays."""
+
+from __future__ import annotations
+
+from typing import Any, Callable, Dict, IO, List
+import argparse
+import dataclasses
+import json
+import re
+import subprocess
+import sys
+
+import paho.mqtt.client as mqtt
+
+
+@dataclasses.dataclass
+class Relay:
+    """A configuration object for an individual relay."""
+    relay: str
+    topic: str
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> 'Switch':
+        return cls(**d)
+
+
+@dataclasses.dataclass
+class Config:
+    """A configuration object for the entire server."""
+    broker_host: str
+    broker_port: int
+
+    relays: List[Relay]
+
+    @classmethod
+    def from_file(cls, file: IO) -> Config:
+        d = json.load(file)
+        d['relays'] = [Relay.from_dict(r) for r in d['relays']]
+        return cls(**d)
+
+
+def log(msg: str):
+    """log a message to stderr."""
+    print(msg, file=sys.stderr)
+
+
+def read_relay_states() -> Dict[str, bool]:
+    """read the states of all relays attached to the host."""
+    relay_states = {}
+    relay_state_line = re.compile('^[A-Z]{5}_[0-9]=(0|1)$')
+    try:
+        cmd = subprocess.run(['usbrelay'], check=True, stdout=subprocess.PIPE)
+        for line in cmd.stdout.decode('utf-8').splitlines():
+            if relay_state_line.match(line):
+                relay, state = line.split('=')
+                log(f'found relay {relay}')
+                relay_states[relay] = state == 1
+    except subprocess.CalledProcessError as e:
+        log(f'could not read relay states: {e}')
+    finally:
+        return relay_states
+
+
+def set_relay_state(relay: str, on: bool):
+    """set the state of a given relay to ON or OFF."""
+    try:
+        state = 1 if on else 0
+        subprocess.run(['usbrelay', f'{relay}={state}'], check=True)
+    except subprocess.CalledProcessError as e:
+        log(f'could not set relay {relay} state to {state}: {e}')
+
+
+def on_disconnect(client, userdata, flags, return_code):
+    log('disconnected from MQTT broker')
+
+
+def on_connect(config: Config) -> Callable:
+    def callback(client, userdata, flags, return_code):
+        log('connected to MQTT broker')
+
+        relay_states = read_relay_states()
+        log(f'found relay states: {relay_states}')
+
+        for relay in config.relays:
+            log(f'setting up relay {relay}')
+            if relay.relay in relay_states:
+                state = 'on' if relay_states[relay.relay] else 'off'
+                log(f'publishing to {relay.topic}')
+                client.publish(relay.topic, payload=state, qos=1, retain=True)
+            log(f'subscribing to {relay.topic}')
+            client.subscribe(relay.topic, qos=1)
+            client.message_callback_add(relay.topic, on_message(relay.relay))
+    return callback
+
+
+def on_message(relay: str) -> Callable:
+    def callback(client, userdata, message):
+        state = message.payload.decode()
+        if state == 'on':
+            log(f'{relay}: setting state on')
+            set_relay_state(relay, True)
+        elif state == 'off':
+            log(f'{relay}: setting state off')
+            set_relay_state(relay, False)
+        else:
+            log(f'{relay}: unknown state: {state}')
+    return callback
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config-path', type=argparse.FileType('r'),
+                        required=True, help='path to config.json')
+    args = parser.parse_args()
+
+    config = Config.from_file(args.config_path)
+
+    client = mqtt.Client()
+    client.on_connect = on_connect(config)
+    client.on_disconnect = on_disconnect
+    client.connect(config.broker_host, config.broker_port)
+    client.loop_forever()
