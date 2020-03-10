@@ -1,4 +1,4 @@
-# CatBus usbrelay bridge
+# CatBus ↔ usbrelay bridge
 
 A bridge to allow controlling USB relays over CatBus. 
 
